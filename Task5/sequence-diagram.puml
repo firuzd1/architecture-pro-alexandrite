@@ -1,0 +1,43 @@
+@startuml
+title Кеширование в MES — чтение и запись
+
+actor Оператор
+participant "MES Frontend" as FE
+participant "MES Backend" as BE
+participant "Redis" as Redis
+participant "MES DB" as DB
+queue "RabbitMQ" as MQ
+
+== Чтение списка заказов ==
+
+Оператор -> FE: открывает дашборд
+FE -> BE: GET /orders?status=PRICE_CALCULATED
+BE -> Redis: GET orders:status:PRICE_CALCULATED
+
+alt Cache Hit
+    Redis --> BE: список заказов
+    BE --> FE: список заказов (из кеша, быстро)
+else Cache Miss
+    Redis --> BE: null
+    BE -> DB: SELECT * FROM orders WHERE status=...
+    DB --> BE: список заказов
+    BE -> Redis: SET orders:status:PRICE_CALCULATED TTL=300s
+    BE --> FE: список заказов (из БД)
+end
+
+FE --> Оператор: отображает список заказов
+
+== Изменение статуса заказа ==
+
+Оператор -> FE: берёт заказ в работу
+FE -> BE: PATCH /orders/{id}/status MANUFACTURING_STARTED
+BE -> DB: UPDATE orders SET status=MANUFACTURING_STARTED WHERE id={id}
+DB --> BE: ok
+BE -> Redis: DEL orders:status:PRICE_CALCULATED
+BE -> Redis: DEL orders:status:MANUFACTURING_STARTED
+Redis --> BE: ok
+BE -> MQ: publish OrderStatusChanged event
+BE --> FE: 200 ok
+FE --> Оператор: статус обновлён
+
+@enduml
